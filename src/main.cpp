@@ -367,7 +367,7 @@ static bool clFetch() {
   a.nWins = 0;
   a.extra = "";
   const char *keys[] = {"five_hour", "seven_day"};
-  const char *labels[] = {"5-hour", "Weekly"};
+  const char *labels[] = {"5-Hour", "Weekly"};
   for (int i = 0; i < 2; i++) {
     JsonVariant v = d[keys[i]];
     if (v.is<JsonObject>() && !v["utilization"].isNull())
@@ -432,7 +432,7 @@ static void startDeviceFlow() {
   Serial.printf("[chatgpt] usercode -> %d\n", code);
   JsonDocument d;
   if (code != 200 || deserializeJson(d, resp)) {
-    dev.error = code == 404 ? "Device login is turned off for this account" : "Couldn't get a code (" + String(code) + ")";
+    dev.error = code == 404 ? "Device sign-in is turned off" : "Couldn't get a code (" + String(code) + ")";
     return;
   }
   dev.authId = d["device_auth_id"] | "";
@@ -489,8 +489,8 @@ static int oaGetUsage(String &resp) {
 
 static String windowLabel(long secs) {
   if (secs >= 6 * 86400) return "Weekly";
-  if (secs >= 86400) return String(secs / 86400) + "-day";
-  if (secs > 0) return String((secs + 1800) / 3600) + "-hour";
+  if (secs >= 86400) return String(secs / 86400) + "-Day";
+  if (secs > 0) return String((secs + 1800) / 3600) + "-Hour";
   return "Limit";
 }
 
@@ -530,7 +530,7 @@ static bool oaFetch() {
 }
 
 // ---------------------------------------------------------------- drawing
-static const int TOP_H = 34, PY = 40, PW = 228, PH = 274;
+static const int TOP_H = 34, PY = 40, PW = 228, PH = 276;
 static int panelX(int i) { return 8 + i * (PW + 8); }
 
 static void drawClaudeMark(int cx, int cy, int r, RGB col, uint16_t bg) {
@@ -580,8 +580,19 @@ static void drawTopBar() {
   drawWifiIcon(448, 26);
 }
 
+// Shrink a string with "..." until it fits maxW pixels in the current font.
+static String fit(String s, int maxW) {
+  if (tft.textWidth(s) <= maxW) return s;
+  while (s.length() > 1 && tft.textWidth(s + "...") > maxW) s.remove(s.length() - 1);
+  s.trim();
+  return s + "...";
+}
+
 // Two concentric anti-aliased 270-degree rings: outer = 5-hour, inner = weekly.
-static const int G = 172;
+//
+// Panel layout (y relative to PY):  0-38 header | 40-196 gauge | 208 row 1 | 231 row 2 | 256 note
+static const int G = 156;
+static const int GAUGE_Y = 40, ROW1_Y = 208, ROW2_Y = 231, NOTE_Y = 256;
 static void ring(float rm, float hw, float pct, RGB col, bool track) {
   const float cx = (G - 1) / 2.0f, cy = cx, a0 = 135, sweep = 270;
   const float a1 = a0 + sweep * constrain(pct, 0, 100) / 100.0f;
@@ -621,27 +632,32 @@ static void drawGauge(int i) {
   Account &a = acc[i];
   float p0 = a.shown[0], p1 = a.shown[1];
   gauge.fillScreen(c565(C_CARD));
-  ring(78, 9, p0, levelColor(a.brand, a.nWins > 0 ? a.wins[0].pct : p0), true);
-  if (a.nWins > 1) ring(57, 6, p1, innerColor(a.brand, a.wins[1].pct), true);
+  ring(68, 8, p0, levelColor(a.brand, a.nWins > 0 ? a.wins[0].pct : p0), true);
+  if (a.nWins > 1) ring(50, 5, p1, innerColor(a.brand, a.wins[1].pct), true);
   const int cx = G / 2;
   char num[8];
-  snprintf(num, sizeof num, "%d", (int)roundf(p0));
-  gauge.setFont(&fonts::DejaVu40);
+  int v = (int)roundf(p0);
+  snprintf(num, sizeof num, "%d", v);
+  const lgfx::IFont *big = v >= 100 ? (const lgfx::IFont *)&fonts::DejaVu24 : (const lgfx::IFont *)&fonts::DejaVu40;
+  gauge.setFont(big);
   int wn = gauge.textWidth(num);
   gauge.setFont(&fonts::DejaVu18);
   int wp = gauge.textWidth("%");
-  int x0 = cx - (wn + wp + 2) / 2, base = cx + 12;
+  int x0 = cx - (wn + wp + 2) / 2, base = cx + (v >= 100 ? 8 : 13);
   gauge.setTextDatum(baseline_left);
-  gauge.setFont(&fonts::DejaVu40);
+  gauge.setFont(big);
   gauge.setTextColor(c565(C_FG));
   gauge.drawString(num, x0, base);
   gauge.setFont(&fonts::DejaVu18);
   gauge.setTextColor(c565(C_DIM));
-  gauge.drawString("%", x0 + wn + 2, base - 16);
+  gauge.drawString("%", x0 + wn + 2, base - (v >= 100 ? 0 : 14));
+  // window name sits in the opening at the bottom of the outer ring
   gauge.setFont(&fonts::FreeSansBold9pt7b);
   gauge.setTextDatum(middle_center);
-  gauge.drawString(a.nWins ? a.wins[0].label : "", cx, cx + 28);
-  gauge.pushSprite(panelX(i) + (PW - G) / 2, PY + 40);
+  String lbl = a.nWins ? a.wins[0].label : String("");
+  lbl.toUpperCase();
+  gauge.drawString(lbl, cx, cx + 62);
+  gauge.pushSprite(panelX(i) + (PW - G) / 2, PY + GAUGE_Y);
 }
 
 static void drawPanelHeader(int i) {
@@ -656,94 +672,93 @@ static void drawPanelHeader(int i) {
   tft.setTextColor(c565(C_FG));
   tft.drawString(a.name, x + 40, PY + 21);
   int nx = x + 40 + tft.textWidth(a.name) + 8;
-  // status dot
-  if (a.signedIn()) {
+  if (a.signedIn()) {  // status dot
     bool stale = !a.haveData || millis() - a.lastOk > 15 * 60 * 1000UL;
     tft.fillCircle(nx + 3, PY + 22, 3, c565(a.lastError.length() && stale ? C_RED : stale ? C_AMBER : C_GREEN));
   }
   if (a.plan.length()) {
     tft.setFont(&fonts::FreeSansBold9pt7b);
-    int w = tft.textWidth(a.plan) + 16;
-    int px = x + PW - 12 - w;
+    int right = x + PW - 12, room = right - (nx + 14) - 16;
+    String plan = fit(a.plan, room);
+    int w = tft.textWidth(plan) + 16;
+    int px = right - w;
     tft.fillRoundRect(px, PY + 10, w, 22, 11, c565(mix(C_CARD, a.brand, 0.22f)));
     tft.setTextColor(c565(a.brand));
     tft.setTextDatum(middle_center);
-    tft.drawString(a.plan, px + w / 2, PY + 21);
+    tft.drawString(plan, px + w / 2, PY + 21);
   }
 }
 
-static void legendRow(int x, int y, RGB dot, const Win &w) {
-  tft.fillCircle(x + 5, y, 4, c565(dot));
-  tft.setFont(&fonts::FreeSansBold9pt7b);
-  tft.setTextDatum(middle_left);
-  tft.setTextColor(c565(C_FG));
-  String l = w.label + " " + String((int)roundf(w.pct)) + "%";
-  tft.drawString(l, x + 16, y);
-  if (w.reset && timeValid()) {
-    tft.setFont(&fonts::FreeSans9pt7b);
+// One legend line: colored dot, "5-Hour: 51%" on the left, reset info on the right.
+static void legendRow(int i, int y, RGB dot, const Win &w, bool showWhen) {
+  int left = panelX(i) + 18, right = panelX(i) + PW - 16;
+  tft.fillCircle(left + 4, y, 4, c565(dot));
+  tft.setFont(&fonts::DejaVu12);
+  String r;
+  if (w.reset && timeValid()) r = showWhen ? fmtWhen(w.reset) : "in " + fmtDur(w.reset - nowT());
+  int wr = r.length() ? tft.textWidth(r) : 0;
+  if (wr) {
     tft.setTextColor(c565(C_DIM));
     tft.setTextDatum(middle_right);
-    tft.drawString(fmtDur(w.reset - nowT()), x + PW - 32, y);
+    tft.drawString(r, right, y);
   }
+  String lbl = w.label + ": ";
+  String pct = String((int)roundf(w.pct)) + "%";
+  int x = left + 14;
+  tft.setTextDatum(middle_left);
+  tft.setTextColor(c565(C_DIM));
+  tft.drawString(lbl, x, y);
+  tft.setTextColor(c565(C_FG));
+  tft.drawString(pct, x + tft.textWidth(lbl), y);
 }
 
 static void drawLegend(int i) {
   Account &a = acc[i];
-  int x = panelX(i) + 16, y = PY + 218;
-  tft.fillRect(panelX(i) + 6, y - 6, PW - 12, PH - 218, c565(C_CARD));
-  if (a.nWins > 0) legendRow(x, y + 6, levelColor(a.brand, a.wins[0].pct), a.wins[0]);
-  if (a.nWins > 1) legendRow(x, y + 28, innerColor(a.brand, a.wins[1].pct), a.wins[1]);
-  String foot;
+  // clear everything below the gauge, staying inside the rounded corners
+  tft.fillRect(panelX(i) + 10, PY + GAUGE_Y + G + 2, PW - 20, PH - (GAUGE_Y + G + 2) - 6, c565(C_CARD));
+  if (a.nWins > 0) legendRow(i, PY + ROW1_Y, levelColor(a.brand, a.wins[0].pct), a.wins[0], false);
+  if (a.nWins > 1) legendRow(i, PY + ROW2_Y, innerColor(a.brand, a.wins[1].pct), a.wins[1], true);
   bool stale = !a.haveData || millis() - a.lastOk > 15 * 60 * 1000UL;
-  if (a.lastError.length() && stale) foot = a.lastError;
-  else if (a.extra.length()) foot = a.extra;
-  else if (a.nWins > 1 && a.wins[1].reset && timeValid()) foot = "week resets " + fmtWhen(a.wins[1].reset);
-  if (!a.haveData && !a.lastError.length()) foot = "Fetching usage...";
+  bool err = a.lastError.length() && stale;
+  String note = err ? a.lastError : a.extra;
+  if (!a.haveData && !a.lastError.length()) note = "Fetching usage...";
+  if (!note.length()) return;
   tft.setFont(&fonts::FreeSans9pt7b);
   tft.setTextDatum(middle_center);
-  tft.setTextColor(c565(a.lastError.length() && stale ? C_AMBER : mix(C_DIM, C_CARD, 0.25f)));
-  tft.drawString(foot, panelX(i) + PW / 2, y + 48);
+  tft.setTextColor(c565(err ? C_AMBER : C_DIM));
+  tft.drawString(fit(note, PW - 32), panelX(i) + PW / 2, PY + NOTE_Y);
+}
+
+static void centerText(const String &s, int cx, int y, const lgfx::IFont *f, RGB col, int maxW) {
+  tft.setFont(f);
+  tft.setTextDatum(middle_center);
+  tft.setTextColor(c565(col));
+  tft.drawString(fit(s, maxW), cx, y);
 }
 
 static void drawSignInBody(int i) {
-  int x = panelX(i), cx = x + PW / 2;
-  tft.fillRect(x + 6, PY + 38, PW - 12, PH - 44, c565(C_CARD));
-  tft.setTextDatum(middle_center);
+  int x = panelX(i), cx = x + PW / 2, maxW = PW - 28;
+  tft.fillRect(x + 10, PY + 38, PW - 20, PH - 44, c565(C_CARD));
   if (i == CL) {
     String url = "http://" + WiFi.localIP().toString() + "/";
-    tft.fillRoundRect(cx - 70, PY + 46, 140, 140, 10, TFT_WHITE);
-    tft.qrcode(url.c_str(), cx - 62, PY + 54, 124, 2);
-    tft.setFont(&fonts::FreeSansBold9pt7b);
-    tft.setTextColor(c565(C_FG));
-    tft.drawString("Scan to sign in", cx, PY + 206);
-    tft.setFont(&fonts::FreeSans9pt7b);
-    tft.setTextColor(c565(C_DIM));
-    tft.drawString("or open", cx, PY + 230);
-    tft.drawString(url, cx, PY + 252);
+    tft.fillRoundRect(cx - 68, PY + 46, 136, 136, 10, TFT_WHITE);
+    tft.qrcode(url.c_str(), cx - 60, PY + 54, 120, 2);
+    centerText("Scan to sign in", cx, PY + 204, &fonts::FreeSansBold9pt7b, C_FG, maxW);
+    centerText("or open", cx, PY + 228, &fonts::FreeSans9pt7b, C_DIM, maxW);
+    centerText(url, cx, PY + 250, &fonts::FreeSans9pt7b, C_DIM, maxW);
     return;
   }
   if (dev.active) {
-    tft.fillRoundRect(cx - 54, PY + 42, 108, 108, 10, TFT_WHITE);
-    tft.qrcode(OA_VERIFY_URL, cx - 48, PY + 48, 96, 3);
-    tft.setFont(&fonts::FreeSans9pt7b);
-    tft.setTextColor(c565(C_DIM));
-    tft.drawString("auth.openai.com/codex/device", cx, PY + 166);
-    tft.fillRoundRect(x + 18, PY + 182, PW - 36, 44, 10, c565(mix(C_CARD, C_GPT, 0.18f)));
-    tft.setFont(&fonts::DejaVu24);
-    tft.setTextColor(c565(C_FG));
-    tft.drawString(dev.userCode, cx, PY + 205);
-    tft.setFont(&fonts::FreeSans9pt7b);
-    tft.setTextColor(c565(C_DIM));
-    tft.drawString("Scan, sign in, enter this code", cx, PY + 248);
+    tft.fillRoundRect(cx - 54, PY + 44, 108, 108, 10, TFT_WHITE);
+    tft.qrcode(OA_VERIFY_URL, cx - 48, PY + 50, 96, 3);
+    centerText("auth.openai.com/codex/device", cx, PY + 168, &fonts::FreeSans9pt7b, C_DIM, maxW);
+    tft.fillRoundRect(x + 18, PY + 184, PW - 36, 40, 10, c565(mix(C_CARD, C_GPT, 0.18f)));
+    centerText(dev.userCode, cx, PY + 204, &fonts::DejaVu24, C_FG, PW - 48);
+    centerText("Scan, sign in, enter code", cx, PY + 246, &fonts::FreeSans9pt7b, C_DIM, maxW);
   } else {
-    tft.setFont(&fonts::FreeSansBold12pt7b);
-    tft.setTextColor(c565(C_FG));
-    tft.drawString(dev.expired ? "Code expired" : "Not connected", cx, PY + 120);
-    tft.setFont(&fonts::FreeSans9pt7b);
-    tft.setTextColor(c565(dev.error.length() ? C_AMBER : C_DIM));
-    if (dev.error.length()) tft.drawString(dev.error, cx, PY + 150);
-    tft.setTextColor(c565(C_DIM));
-    tft.drawString("Press BOOT for a new code", cx, PY + 176);
+    centerText(dev.expired ? "Code expired" : "Not connected", cx, PY + 112, &fonts::FreeSansBold12pt7b, C_FG, maxW);
+    if (dev.error.length()) centerText(dev.error, cx, PY + 144, &fonts::FreeSans9pt7b, C_AMBER, maxW);
+    centerText("Press BOOT for a new code", cx, PY + 170, &fonts::FreeSans9pt7b, C_DIM, maxW);
   }
 }
 
