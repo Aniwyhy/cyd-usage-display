@@ -418,7 +418,6 @@ static bool oaRefresh() {
   int code = https("POST", OA_TOKEN_URL, body, nullptr, {{"User-Agent", "codex-cli"}}, resp);
   Serial.printf("[chatgpt] refresh -> %d\n", code);
   if (code == 200 && oaStoreTokens(resp)) return true;
-  Serial.println(resp.substring(0, 200));
   if (code == 400 || code == 401) { signOut(a); a.lastError = "Signed out"; }
   else a.lastError = "Refresh failed (" + String(code) + ")";
   return false;
@@ -504,7 +503,7 @@ static bool oaFetch() {
     if (!oaRefresh()) return false;
     code = oaGetUsage(resp);
   }
-  Serial.printf("[chatgpt] usage %d %s\n", code, resp.substring(0, 300).c_str());
+  Serial.printf("[chatgpt] usage %d\n", code);
   if (code == 429) { a.lastError = "Rate limited"; a.nextFetchAt = millis() + 10 * 60 * 1000UL; return false; }
   if (code != 200) { a.lastError = "Usage failed (" + String(code) + ")"; return false; }
   JsonDocument d;
